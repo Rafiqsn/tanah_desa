@@ -80,4 +80,33 @@ class ApprovalRequest extends Model
     {
         return $this->status === self::STATUS_PENDING;
     }
+
+    public function toArray()
+    {
+        $arr = parent::toArray();
+
+        // Tambah URL untuk path-path tertentu di payload (tanpa mengubah nilai aslinya)
+        if (isset($arr['payload']) && is_array($arr['payload'])) {
+            $arr['payload'] = $this->withUrlOnPayload($arr['payload'], [
+                'foto_ktp',         // <-- daftar key path yg ingin ditambahkan URL-nya
+                // 'lampiran_path',
+                // 'dokumen_path',
+            ]);
+        }
+
+        return $arr;
+    }
+
+     private function withUrlOnPayload(array $payload, array $keys): array
+    {
+        foreach ($keys as $k) {
+            if (!empty($payload[$k])) {
+                $payload[$k . '_url'] = url($payload[$k]);
+            } else {
+                // konsisten: tetap ada key *_url tapi null
+                $payload[$k . '_url'] = null;
+            }
+        }
+        return $payload;
+    }
 }

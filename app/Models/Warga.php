@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\URL;
 
 class Warga extends Model
 {
@@ -20,6 +21,7 @@ class Warga extends Model
         'agama',
         'pendidikan_terakhir',
         'pekerjaan',
+        'foto_ktp',
         'kewarganegaraan',
         'alamat_lengkap',
         'nik',
@@ -45,4 +47,10 @@ class Warga extends Model
                ->orWhere('nik', 'like', "%{$term}%");
         });
     }
+
+        public function getFotoUrlAttribute(): ?string
+    {
+        return $this->foto_ktp ? url($this->foto_ktp) : null;
+    }
+
 }

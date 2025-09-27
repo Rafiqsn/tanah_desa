@@ -18,7 +18,7 @@ return new class extends Migration {
             $t->string('agama')->nullable();
             $t->string('pendidikan_terakhir')->nullable();
             $t->string('pekerjaan')->nullable();
-
+            $t->longText('foto_ktp')->nullable();
             $t->enum('kewarganegaraan', ['WNI','WNA'])->default('WNI');
             $t->string('alamat_lengkap')->nullable();
 

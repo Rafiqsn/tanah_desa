@@ -7,8 +7,15 @@ use App\Http\Controllers\TanahReadController;
 use App\Http\Controllers\WargaReadController;
 use App\Http\Controllers\StaffProposalController;
 use App\Http\Controllers\ApprovalController;
+use App\Http\Controllers\PublicInfografisController;
 
 Route::post('/login', [AuthController::class, 'login'])->name('login');
+
+
+
+Route::get('/public/infografis/summary', [PublicInfografisController::class, 'summary'])
+     ->middleware('throttle:30,1');
+
 
 
 Route::middleware('auth:sanctum')->group(function () {
