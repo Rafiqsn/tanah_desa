@@ -53,4 +53,12 @@ class Warga extends Model
         return $this->foto_ktp ? url($this->foto_ktp) : null;
     }
 
+    // app/Models/Warga.php
+public function tanah()
+{
+    // FK ada di tanah.warga_id
+    return $this->hasMany(\App\Models\Tanah::class, 'warga_id');
+}
+
+
 }

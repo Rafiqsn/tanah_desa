@@ -33,6 +33,7 @@ class ApprovalRequest extends Model
     public const MODULE_TANAH  = 'tanah';
     public const MODULE_WARGA  = 'warga';
     public const MODULE_GEO    = 'geojson';
+    public const MODULE_BIDANG    = 'bidang';
 
     public const ACTION_CREATE = 'create';
     public const ACTION_UPDATE = 'update';

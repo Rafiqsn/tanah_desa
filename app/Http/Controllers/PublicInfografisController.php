@@ -9,52 +9,53 @@ use Illuminate\Support\Facades\Cache;
 class PublicInfografisController extends Controller
 {
     // GET /api/public/infografis/summary
-        public function summary()
+    public function summary()
     {
         $data = Cache::remember('pub:infografis:summary', now()->addMinutes(30), function () {
-            $s = DB::table('tanah')->selectRaw('
-                -- Status Hak
-                SUM(COALESCE(hm,0))  as hm,
-                SUM(COALESCE(hgb,0)) as hgb,
-                SUM(COALESCE(hp,0))  as hp,
-                SUM(COALESCE(hgu,0)) as hgu,
-                SUM(COALESCE(hpl,0)) as hpl,
-                SUM(COALESCE(ma,0))  as ma,
-                SUM(COALESCE(vi,0))  as vi,
-                SUM(COALESCE(tn,0))  as tn,
+            // Agregasi di tabel BIDANG (exclude soft-deleted)
+            $s = DB::table('bidang')->whereNull('deleted_at')->selectRaw("
+                COUNT(*) as bidang,
 
-                -- Non Pertanian
-                SUM(COALESCE(perumahan,0))           as perumahan,
-                SUM(COALESCE(perdagangan_jasa,0))    as perdagangan_jasa,
-                SUM(COALESCE(perkantoran,0))         as perkantoran,
-                SUM(COALESCE(industri,0))            as industri,
-                SUM(COALESCE(fasilitas_umum,0))      as fasilitas_umum,
+                -- Status Hak (per bidang hanya 1 kategori)
+                SUM(CASE WHEN status_hak='HM'  THEN COALESCE(luas_m2,0) ELSE 0 END) as hm,
+                SUM(CASE WHEN status_hak='HGB' THEN COALESCE(luas_m2,0) ELSE 0 END) as hgb,
+                SUM(CASE WHEN status_hak='HP'  THEN COALESCE(luas_m2,0) ELSE 0 END) as hp,
+                SUM(CASE WHEN status_hak='HGU' THEN COALESCE(luas_m2,0) ELSE 0 END) as hgu,
+                SUM(CASE WHEN status_hak='HPL' THEN COALESCE(luas_m2,0) ELSE 0 END) as hpl,
+                SUM(CASE WHEN status_hak='MA'  THEN COALESCE(luas_m2,0) ELSE 0 END) as ma,
+                SUM(CASE WHEN status_hak='VI'  THEN COALESCE(luas_m2,0) ELSE 0 END) as vi,
+                SUM(CASE WHEN status_hak='TN'  THEN COALESCE(luas_m2,0) ELSE 0 END) as tn,
 
-                -- Pertanian
-                SUM(COALESCE(sawah,0))                as sawah,
-                SUM(COALESCE(tegalan,0))              as tegalan,
-                SUM(COALESCE(perkebunan,0))           as perkebunan,
-                SUM(COALESCE(peternakan_perikanan,0)) as peternakan_perikanan,
-                SUM(COALESCE(hutan_belukar,0))        as hutan_belukar,
-                SUM(COALESCE(hutan_lindung,0))        as hutan_lindung,
-                SUM(COALESCE(mutasi_tanah,0))         as mutasi_tanah,
-                SUM(COALESCE(tanah_kosong,0))         as tanah_kosong,
-                SUM(COALESCE(lain_lain,0))            as lain_lain,
+                -- Penggunaan: Non Pertanian
+                SUM(CASE WHEN penggunaan='PERUMAHAN'         THEN COALESCE(luas_m2,0) ELSE 0 END) as perumahan,
+                SUM(CASE WHEN penggunaan='PERDAGANGAN_JASA'  THEN COALESCE(luas_m2,0) ELSE 0 END) as perdagangan_jasa,
+                SUM(CASE WHEN penggunaan='PERKANTORAN'       THEN COALESCE(luas_m2,0) ELSE 0 END) as perkantoran,
+                SUM(CASE WHEN penggunaan='INDUSTRI'          THEN COALESCE(luas_m2,0) ELSE 0 END) as industri,
+                SUM(CASE WHEN penggunaan='FASILITAS_UMUM'    THEN COALESCE(luas_m2,0) ELSE 0 END) as fasilitas_umum,
 
-                COUNT(*) as bidang
-            ')->first();
+                -- Penggunaan: Pertanian
+                SUM(CASE WHEN penggunaan='SAWAH'                 THEN COALESCE(luas_m2,0) ELSE 0 END) as sawah,
+                SUM(CASE WHEN penggunaan='TEGALAN'               THEN COALESCE(luas_m2,0) ELSE 0 END) as tegalan,
+                SUM(CASE WHEN penggunaan='PERKEBUNAN'            THEN COALESCE(luas_m2,0) ELSE 0 END) as perkebunan,
+                SUM(CASE WHEN penggunaan='PETERNAKAN_PERIKANAN'  THEN COALESCE(luas_m2,0) ELSE 0 END) as peternakan_perikanan,
+                SUM(CASE WHEN penggunaan='HUTAN_BELUKAR'         THEN COALESCE(luas_m2,0) ELSE 0 END) as hutan_belukar,
+                SUM(CASE WHEN penggunaan='HUTAN_LINDUNG'         THEN COALESCE(luas_m2,0) ELSE 0 END) as hutan_lindung,
+                SUM(CASE WHEN penggunaan='MUTASI_TANAH'          THEN COALESCE(luas_m2,0) ELSE 0 END) as mutasi_tanah,
+                SUM(CASE WHEN penggunaan='TANAH_KOSONG'          THEN COALESCE(luas_m2,0) ELSE 0 END) as tanah_kosong,
+                SUM(CASE WHEN penggunaan='LAIN_LAIN'             THEN COALESCE(luas_m2,0) ELSE 0 END) as lain_lain
+            ")->first();
 
-            // Ringkasan
+            // Hitung ringkasan
             $bersertifikat = (float)$s->hm + (float)$s->hgb + (float)$s->hp + (float)$s->hgu + (float)$s->hpl;
             $belum         = (float)$s->ma + (float)$s->vi + (float)$s->tn;
             $totalHak      = $bersertifikat + $belum;
 
             $totalNon      = (float)$s->perumahan + (float)$s->perdagangan_jasa + (float)$s->perkantoran
-                        + (float)$s->industri + (float)$s->fasilitas_umum;
+                           + (float)$s->industri + (float)$s->fasilitas_umum;
 
             $totalPert     = (float)$s->sawah + (float)$s->tegalan + (float)$s->perkebunan
-                        + (float)$s->peternakan_perikanan + (float)$s->hutan_belukar + (float)$s->hutan_lindung
-                        + (float)$s->mutasi_tanah + (float)$s->tanah_kosong + (float)$s->lain_lain;
+                           + (float)$s->peternakan_perikanan + (float)$s->hutan_belukar + (float)$s->hutan_lindung
+                           + (float)$s->mutasi_tanah + (float)$s->tanah_kosong + (float)$s->lain_lain;
 
             return [
                 'meta' => [
@@ -62,11 +63,11 @@ class PublicInfografisController extends Controller
                     'bidang'       => (int)$s->bidang,
                 ],
                 'ringkasan' => [
-                    'total_status_hak_m2'   => $totalHak,
-                    'bersertifikat_m2'      => $bersertifikat,
-                    'belum_sertifikat_m2'   => $belum,
-                    'non_pertanian_m2'      => $totalNon,
-                    'pertanian_m2'          => $totalPert,
+                    'total_status_hak_m2'  => $totalHak,       // total dari kategori status hak
+                    'bersertifikat_m2'     => $bersertifikat,
+                    'belum_sertifikat_m2'  => $belum,
+                    'non_pertanian_m2'     => $totalNon,
+                    'pertanian_m2'         => $totalPert,
                 ],
                 'rincian' => [
                     'status_hak' => [

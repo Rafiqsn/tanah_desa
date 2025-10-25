@@ -11,7 +11,7 @@ return new class extends Migration {
             $t->id();
 
             // Target modul & aksi
-            $t->enum('module', ['tanah','warga','geojson']);     // modul yang diubah
+            $t->enum('module', ['tanah','warga','geojson','bidang']);     // modul yang diubah
             $t->enum('action', ['create','update','delete']);    // jenis operasi
             $t->unsignedBigInteger('target_id')->nullable();     // id record target (untuk update/delete)
 

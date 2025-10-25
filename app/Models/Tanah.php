@@ -91,4 +91,24 @@ class Tanah extends Model
         }
         return $q;
     }
+
+        public function bidang()
+    {
+        return $this->hasMany(\App\Models\Bidang::class, 'tanah_id');
+    }
+
+    public function recalcJumlahM2(bool $save = true): void
+    {
+        $sum = (float) $this->bidang()->sum('luas_m2');
+        $this->jumlah_m2 = $sum;
+        if ($save) $this->save();
+    }
+
+    // optional: expose nilai hitung langsung di JSON
+    protected $appends = ['jumlah_m2_computed'];
+    public function getJumlahM2ComputedAttribute(): float
+    {
+        return (float) $this->bidang()->sum('luas_m2');
+    }
+
 }

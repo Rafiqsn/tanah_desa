@@ -39,6 +39,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post  ('/proposals/tanah',       [StaffProposalController::class, 'proposeTanahCreate']);
         Route::patch ('/proposals/tanah/{id}',  [StaffProposalController::class, 'proposeTanahUpdate']);
         Route::delete('/proposals/tanah/{id}',  [StaffProposalController::class, 'proposeTanahDelete']);
+        // BIDANG (proposals)
+        Route::post  ('/proposals/tanah/{tanah}/bidang', [StaffProposalController::class, 'proposeBidangCreate']);
+        Route::put ('/proposals/bidang/{id}',          [StaffProposalController::class, 'proposeBidangUpdate']);
+        Route::delete('/proposals/bidang/{id}',          [StaffProposalController::class, 'proposeBidangDelete']);
+
         // Warga
         Route::post  ('/proposals/warga',       [StaffProposalController::class, 'proposeWargaCreate']);
         Route::patch ('/proposals/warga/{id}',  [StaffProposalController::class, 'proposeWargaUpdate']);

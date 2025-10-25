@@ -1,36 +1,40 @@
 <?php
+// database/migrations/2025_09_28_000000_create_geojson_table.php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
-    public function up(): void
-    {
+    public function up(): void {
         Schema::create('geojson', function (Blueprint $t) {
-            $t->id();
+            $t->id(); // sudah primary
+            $t->string('nama')->nullable();
 
-            // Relasi ke tabel tanah (A.6)
-            $t->foreignId('tanah_id')->constrained('tanah')->cascadeOnDelete();
+            // GeoJSON mentah (Polygon/Feature/FeatureCollection)
+            $t->longText('feature_json');
+            $t->unsignedSmallInteger('srid')->default(4326);
 
-            // Menyimpan GeoJSON (Feature atau Polygon) dari Leaflet
-            // Contoh isi: {"type":"Feature","geometry":{...},"properties":{...}}
-            $t->json('feature');
+            // ringkasan spasial (opsional tapi membantu)
+            $t->decimal('centroid_lng', 11, 8)->nullable();
+            $t->decimal('centroid_lat', 10, 8)->nullable();
 
-            // Info bantu untuk peta/rekap
-            $t->decimal('centroid_lat', 10, 7)->nullable();
-            $t->decimal('centroid_lng', 10, 7)->nullable();
-            $t->decimal('luas_terhitung_m2', 14, 2)->nullable();
+            $t->unsignedInteger('versi')->default(1);
+
+            // self reference (versi sebelumnya). Samakan tipe dengan id() = BIGINT
+            $t->foreignId('parent_id')->nullable()
+              ->constrained('geojson')->nullOnDelete();
+
+            $t->json('properties')->nullable();
 
             $t->timestamps();
+            $t->softDeletes();
 
-            // 1:1 per bidang tanah
-            $t->unique('tanah_id');
+            $t->index(['srid','versi']);
         });
     }
 
-    public function down(): void
-    {
+    public function down(): void {
         Schema::dropIfExists('geojson');
     }
 };
