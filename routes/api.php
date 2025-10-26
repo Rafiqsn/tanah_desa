@@ -8,6 +8,8 @@ use App\Http\Controllers\WargaReadController;
 use App\Http\Controllers\StaffProposalController;
 use App\Http\Controllers\ApprovalController;
 use App\Http\Controllers\PublicInfografisController;
+use App\Http\Controllers\ApprovalAuditController;
+use App\Http\Controllers\MapBoundariesController;
 
 Route::post('/login', [AuthController::class, 'login'])->name('login');
 
@@ -15,6 +17,7 @@ Route::post('/login', [AuthController::class, 'login'])->name('login');
 
 Route::get('/public/infografis/summary', [PublicInfografisController::class, 'summary'])
      ->middleware('throttle:30,1');
+Route::get('/public/map', [MapBoundariesController::class, 'bidang']);
 
 
 
@@ -31,6 +34,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get ('/approvals',               [ApprovalController::class, 'index']);      // list pending
         Route::post('/approvals/{id}/approve',  [ApprovalController::class, 'approve']);    // terapkan
         Route::post('/approvals/{id}/reject',   [ApprovalController::class, 'reject']);     // tolak
+
+        Route::get('/approvals/audit',   [ApprovalAuditController::class, 'index']);   // list + filter;   // ringkasan
+        Route::get('/approvals/{id}',   [ApprovalAuditController::class, 'show']);    // detail
      });
 
     //Penyedia Restoran field
