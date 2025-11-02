@@ -48,6 +48,7 @@ Route::middleware('auth:sanctum')->group(function () {
         // BIDANG (proposals)
         Route::post  ('/proposals/tanah/{tanah}/bidang', [StaffProposalController::class, 'proposeBidangCreate']);
         Route::put ('/proposals/bidang/{id}',          [StaffProposalController::class, 'proposeBidangUpdate']);
+        Route::get('/proposals/bidang/{id}', [StaffProposalController::class, 'proposeBidangShow']);
         Route::delete('/proposals/bidang/{id}',          [StaffProposalController::class, 'proposeBidangDelete']);
 
         // Warga

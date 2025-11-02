@@ -8,17 +8,44 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\File;
 use App\Models\ApprovalRequest;
+use App\Models\Tanah;
+use App\Models\Bidang;
+use App\Models\Warga;
 
 class StaffProposalController extends Controller
 {
+        private function buildPemilikPreviewFromTanahId(int $tanahId): array
+    {
+        $t = \App\Models\Tanah::with('pemilik:id,nama_lengkap,nik')->find($tanahId);
+        if (!$t) return ['tanah_id' => $tanahId, 'nama' => '-', 'nik' => null, 'nomor_urut' => null];
+
+        return [
+            'tanah_id'   => $t->id,
+            'nomor_urut' => $t->nomor_urut,
+            'nama'       => optional($t->pemilik)->nama_lengkap ?? ($t->pemilik_nama ?? '-'),
+            'nik'        => optional($t->pemilik)->nik, // bisa null kalau tak ada
+        ];
+    }
+
+    private function buildPemilikPreviewFromWargaId(?int $wargaId, ?string $fallbackNama = null): array
+    {
+        if ($wargaId) {
+            $w = \App\Models\Warga::select('id','nama_lengkap','nik')->find($wargaId);
+            if ($w) {
+                return ['warga_id' => $w->id, 'nama' => $w->nama_lengkap, 'nik' => $w->nik];
+            }
+        }
+        return ['warga_id' => $wargaId, 'nama' => $fallbackNama ?? '-', 'nik' => null];
+    }
+
     // ======== T A N A H ========
 
         // POST /api/proposals/tanah
         public function proposeTanahCreate(Request $r)
     {
         $data = $r->validate([
-            'nomor_urut'        => 'required|string|max:64',
-            'warga_id'          => 'nullable|exists:warga,id',
+            'nomor_urut'        => 'nullable|string|max:64',
+            'warga_id'          => 'required|exists:warga,id',
             'nama_pemilik_text' => 'nullable|string|max:255',
             'jumlah_m2'         => 'nullable|numeric|min:0', // akan diabaikan saat apply
             'keterangan'        => 'nullable|string',
@@ -61,14 +88,22 @@ class StaffProposalController extends Controller
             })->all();
         }
 
-        unset($data['jumlah_m2']); // nilai turunan
+       // ...
+            unset($data['jumlah_m2']); // nilai turunan
 
-        $ar = ApprovalRequest::create([
-            'module'       => 'tanah',
-            'action'       => 'create',
-            'payload'      => $data,
-            'submitted_by' => $r->user()->id,
-        ]);
+            // >>> TAMBAH: preview pemilik berdasarkan warga_id / nama_pemilik_text
+            $data['preview_pemilik'] = $this->buildPemilikPreviewFromWargaId(
+                $data['warga_id'] ?? null,
+                $data['nama_pemilik_text'] ?? null
+            );
+
+            $ar = ApprovalRequest::create([
+                'module'       => 'tanah',
+                'action'       => 'create',
+                'payload'      => $data,
+                'submitted_by' => $r->user()->id,
+            ]);
+
 
         return response()->json([
             'message' => 'Proposal tanah dibuat, menunggu persetujuan kepala.',
@@ -135,68 +170,119 @@ class StaffProposalController extends Controller
 
 
     // DELETE /api/proposals/tanah/{id}
-    public function proposeTanahDelete(Request $r, $id)
+        public function proposeTanahDelete(Request $r, $id)
     {
-        $ar = ApprovalRequest::create([
+        // Ambil tanah + pemilik + jumlah bidang untuk snapshot
+        $tanah = \App\Models\Tanah::with([
+            'pemilik:id,nik,nama_lengkap'
+        ])->withCount('bidang')->find($id);
+
+        if (! $tanah) {
+            return response()->json(['message' => 'Tanah tidak ditemukan'], 404);
+        }
+
+        // Kalau kamu punya kolom turunan jumlah_m2_computed pakai itu,
+        // kalau tidak ada, fallback ke sum(luas_m2) dari relasi bidang
+        $totalLuas = $tanah->jumlah_m2_computed
+            ?? (float) \App\Models\Bidang::where('tanah_id', $tanah->id)->sum('luas_m2');
+
+        $payload = [
+            'reason' => $r->input('reason'),
+            'snapshot' => [
+                'tanah_id'     => $tanah->id,
+                'nomor_urut'   => $tanah->nomor_urut,
+                'bidang_count' => (int) $tanah->bidang_count,
+                'total_luas_m2'=> (float) $totalLuas,
+                'pemilik'      => [
+                    'id'            => $tanah->warga_id,
+                    'nik'           => $tanah->pemilik->nik ?? null,
+                    'nama_lengkap'  => $tanah->pemilik->nama_lengkap
+                        ?? ($tanah->nama_pemilik_text ?? null),
+                ],
+            ],
+        ];
+
+        $ar = \App\Models\ApprovalRequest::create([
             'module'       => 'tanah',
             'action'       => 'delete',
-            'target_id'    => $id,
-            'payload'      => ['reason' => $r->input('reason')],
+            'target_id'    => $tanah->id,
+            'payload'      => $payload,
             'submitted_by' => $r->user()->id,
         ]);
 
-        return response()->json(['message' => 'Proposal hapus tanah dibuat', 'id' => $ar->id], 202);
+        return response()->json([
+            'message' => 'Proposal hapus tanah dibuat',
+            'id'      => $ar->id,
+            // opsional: echo kilat biar gampang dicek di FE/Postman
+            'preview_pemilik' => $payload['snapshot']['pemilik'],
+        ], 202);
     }
-
 
         // ======== B I D A N G  ========
 
     // POST /api/staff/proposals/tanah/{tanah}/bidang
+    // POST /api/staff/proposals/tanah/{tanah}/bidang
     public function proposeBidangCreate(Request $r, $tanah)
     {
+        // Pastikan id tanah valid & ada
+        // Catatan: param $tanah bisa angka atau instance Tanah (jika pakai implicit binding).
+        $tanahId = $tanah instanceof Tanah ? $tanah->id : (int) $tanah;
+        $tanahRow = Tanah::findOrFail($tanahId); // 404 kalau tidak ada
+
+        // Validasi input bidang
         $data = $r->validate([
-            'luas_m2'     => 'required|numeric|min:0.01',
-            'status_hak'  => 'required|in:HM,HGB,HP,HGU,HPL,MA,VI,TN',
-            'penggunaan'  => 'required|in:PERUMAHAN,PERDAGANGAN_JASA,PERKANTORAN,INDUSTRI,FASILITAS_UMUM,SAWAH,TEGALAN,PERKEBUNAN,PETERNAKAN_PERIKANAN,HUTAN_BELUKAR,HUTAN_LINDUNG,MUTASI_TANAH,TANAH_KOSONG,LAIN_LAIN',
-            'keterangan'  => 'nullable|string',
+            'luas_m2'      => 'required|numeric|min:0.01',
+            'status_hak'   => 'required|in:HM,HGB,HP,HGU,HPL,MA,VI,TN',
+            'penggunaan'   => 'required|in:PERUMAHAN,PERDAGANGAN_JASA,PERKANTORAN,INDUSTRI,FASILITAS_UMUM,SAWAH,TEGALAN,PERKEBUNAN,PETERNAKAN_PERIKANAN,HUTAN_BELUKAR,HUTAN_LINDUNG,MUTASI_TANAH,TANAH_KOSONG,LAIN_LAIN',
+            'keterangan'   => 'nullable|string',
 
-            // GeoJSON: boleh kirim 'geojson' (Feature) atau 'geometry' (Polygon)
-            'geojson'     => 'required_without:geometry|array',
-            'geometry'    => 'required_without:geojson|array',
+            // Boleh kirim 'geojson' (Feature) ATAU 'geometry' (Polygon)
+            'geojson'      => 'required_without:geometry|array',
+            'geometry'     => 'required_without:geojson|array',
 
-            'geojson_nama'=> 'nullable|string|max:255',
-            'srid'        => 'nullable|integer|in:4326',
-            // jika true, wajib 4 sudut (ring tertutup = 5 koordinat)
-            'empat_titik' => 'nullable|boolean',
+            'geojson_nama' => 'nullable|string|max:255',
+            'srid'         => 'nullable|integer|in:4326',
+            'empat_titik'  => 'nullable|boolean',
         ]);
 
-        // Normalisasi ke Feature{ Polygon } + tutup ring
+        // Normalisasi enum ke UPPER (kalau FE salah casing)
+        $data['status_hak'] = strtoupper($data['status_hak']);
+        $data['penggunaan'] = strtoupper($data['penggunaan']);
+
+        // Normalisasi geometri → Feature{ Polygon } + tutup ring
         $feature = $this->normalizeFeature($data['geojson'] ?? $data['geometry']);
-        if ($r->boolean('empat_titik', true)) {
+
+        // Opsional: wajibkan tepat 4 sudut (ring tertutup = 5 titik)
+        if ($r->boolean('empat_titik', false)) {
             $this->assertFourCorners($feature);
         }
 
-        // centroid ringkas (untuk preview/UI)
-        [$cx,$cy] = $this->centroidFromRing($feature['geometry']['coordinates'][0]);
+        // Hitung centroid sederhana untuk preview
+        [$cx, $cy] = $this->centroidFromRing($feature['geometry']['coordinates'][0]);
 
+        // ⛔️ Penting: SELALU overwrite tanah_id dari route, JANGAN ambil dari FE
         $payload = [
-            'tanah_id'     => (int) $tanah,
+            'tanah_id'     => $tanahRow->id,
             'luas_m2'      => (float) $data['luas_m2'],
             'status_hak'   => $data['status_hak'],
             'penggunaan'   => $data['penggunaan'],
             'keterangan'   => $data['keterangan'] ?? null,
             'srid'         => (int)($data['srid'] ?? 4326),
             'geojson_nama' => $data['geojson_nama'] ?? null,
-            'feature'      => $feature,          // simpan Feature langsung di payload
-            'centroid'     => [$cx,$cy],         // memudahkan preview saat review approval
+            'feature'      => $feature,
+            'centroid'     => [$cx, $cy],
         ];
 
-        $ar = \App\Models\ApprovalRequest::create([
+       // ... setelah $payload dibuat
+        $payload['preview_pemilik'] = $this->buildPemilikPreviewFromTanahId($tanahRow->id);
+
+        $ar = ApprovalRequest::create([
             'module'       => 'bidang',
             'action'       => 'create',
             'payload'      => $payload,
             'submitted_by' => $r->user()->id,
         ]);
+
 
         return response()->json([
             'message' => 'Proposal tambah bidang dibuat, menunggu persetujuan kepala.',
@@ -204,6 +290,46 @@ class StaffProposalController extends Controller
             'status'  => $ar->status,
         ], 202);
     }
+
+    /**
+     * GET /api/bidang/{id}
+     * Kembalikan detail bidang + info minimal tanah & geojson untuk prefill form edit.
+     */
+    // impor relasi pemilik
+// Bidang::with(['tanah:id,warga_id,nomor_urut,keterangan', 'tanah.pemilik:id,nik,nama_lengkap', 'geojson:id,nama'])
+
+    public function proposeBidangShow($id)
+    {
+        $b = Bidang::with([
+            'tanah:id,warga_id,nomor_urut,keterangan',
+            'tanah.pemilik:id,nik,nama_lengkap',
+            'geojson:id,nama'
+        ])->findOrFail($id);
+
+        return response()->json([
+            'id'          => $b->id,
+            'tanah_id'    => $b->tanah_id,
+            'geojson_id'  => $b->geojson_id,
+            'luas_m2'     => (float) $b->luas_m2,
+            'status_hak'  => $b->status_hak,
+            'penggunaan'  => $b->penggunaan,
+            'keterangan'  => $b->keterangan,
+            'tanah'       => [
+                'id'         => $b->tanah->id,
+                'nomor_urut' => $b->tanah->nomor_urut,
+                'pemilik'    => $b->tanah->pemilik ? [
+                    'nik'  => $b->tanah->pemilik->nik,
+                    'nama' => $b->tanah->pemilik->nama_lengkap,
+                ] : null,
+            ],
+            'geojson'     => $b->geojson ? [
+                'id'   => $b->geojson->id,
+                'nama' => $b->geojson->nama,
+            ] : null,
+        ]);
+    }
+
+
 
     // PATCH /api/staff/proposals/bidang/{id}
     public function proposeBidangUpdate(Request $r, $id)
@@ -237,17 +363,22 @@ class StaffProposalController extends Controller
             $fields['centroid'] = [$cx,$cy];
         }
 
+        // ... setelah susun $fields
+        $b = \App\Models\Bidang::select('id','tanah_id')->findOrFail($id);
+        $fields['preview_pemilik'] = $this->buildPemilikPreviewFromTanahId($b->tanah_id);
+
         if (empty($fields)) {
             return response()->json(['message' => 'Tidak ada perubahan dikirim'], 422);
         }
 
         $ar = \App\Models\ApprovalRequest::create([
-            'module'       => 'bidang',
-            'action'       => 'update',
-            'target_id'    => $id, // UUID bidang
-            'payload'      => $fields,
+            'module'    => 'bidang',
+            'action'    => 'update',
+            'target_id' => $id,
+            'payload'   => $fields,
             'submitted_by' => $r->user()->id,
         ]);
+
 
         return response()->json(['message' => 'Proposal update bidang dibuat', 'id' => $ar->id], 202);
     }
@@ -255,13 +386,19 @@ class StaffProposalController extends Controller
     // DELETE /api/staff/proposals/bidang/{id}
     public function proposeBidangDelete(Request $r, $id)
     {
+        $b = \App\Models\Bidang::select('id','tanah_id')->findOrFail($id);
+
         $ar = \App\Models\ApprovalRequest::create([
-            'module'       => 'bidang',
-            'action'       => 'delete',
-            'target_id'    => $id,
-            'payload'      => ['reason' => $r->input('reason')],
+            'module'    => 'bidang',
+            'action'    => 'delete',
+            'target_id' => $id,
+            'payload'   => [
+                'reason'          => $r->input('reason'),
+                'preview_pemilik' => $this->buildPemilikPreviewFromTanahId($b->tanah_id),
+            ],
             'submitted_by' => $r->user()->id,
         ]);
+
 
         return response()->json(['message' => 'Proposal hapus bidang dibuat', 'id' => $ar->id], 202);
     }
@@ -437,13 +574,25 @@ class StaffProposalController extends Controller
      * DELETE /api/proposals/warga/{id}
      * Buat proposal DELETE Warga.
      */
-    public function proposeWargaDelete(Request $r, $id)
+        public function proposeWargaDelete(Request $r, $id)
     {
+        $warga = Warga::find($id);
+        if (!$warga) {
+            return response()->json(['message' => 'Warga tidak ditemukan'], 404);
+        }
+
         $ar = ApprovalRequest::create([
             'module'       => 'warga',
             'action'       => 'delete',
             'target_id'    => $id,
-            'payload'      => ['reason' => $r->input('reason')],
+            'payload'      => [
+                'reason'   => $r->input('reason'),
+                'snapshot' => [
+                    'nik'           => $warga->nik,
+                    'nama_lengkap'  => $warga->nama_lengkap,
+                    // tambahkan field lain yang mau ditampilkan
+                ],
+            ],
             'submitted_by' => $r->user()->id,
         ]);
 
@@ -452,6 +601,7 @@ class StaffProposalController extends Controller
             'id'      => $ar->id
         ], 202);
     }
+
 
     /**
      * GET /api/proposals/my
