@@ -168,13 +168,96 @@ class ApprovalAuditController extends Controller
         ];
     }
 
-    public function show(Request $r, $id)
+        public function show(Request $r, $id)
     {
         $a = ApprovalRequest::whereIn('status', ['approved', 'rejected'])
             ->with(['submitter:id,name,email', 'reviewer:id,name,email'])
             ->findOrFail($id);
 
         $labelMap = ['create' => 'Tambah', 'update' => 'Edit', 'delete' => 'Hapus'];
+
+        $payload = null;
+        if ($r->boolean('include_payload', false)) {
+            $payload = $a->payload; // kirim yang ada dulu
+
+            // ⬇️ fallback jika kosong
+            if (is_null($payload)) {
+                switch ($a->module) {
+                    case 'warga':
+                        if ($w = \App\Models\Warga::find($a->target_id)) {
+                            $payload = ['after' => [
+                                'nama_pemilik'     => $w->nama_lengkap,
+                                'nomor_urut'       => null,
+                                'jumlah_luas'      => null,
+                                'status_hak_tanah' => null,
+                                'penggunaan_tanah' => [],
+                                'keterangan'       => $w->keterangan,
+                            ]];
+                        }
+                        break;
+                    case 'tanah':
+                        if ($t = \App\Models\Tanah::with('pemilik')->find($a->target_id)) {
+                            $payload = ['after' => [
+                                'nama_pemilik'     => optional($t->pemilik)->nama_lengkap,
+                                'nomor_urut'       => (string)$t->nomor_urut,
+                                'jumlah_luas'      => (string)$t->jumlah_m2,
+                                'status_hak_tanah' => null,
+                                'penggunaan_tanah' => [],
+                                'keterangan'       => $t->keterangan,
+                            ]];
+                        }
+                        break;
+                    case 'bidang':
+                        if ($b = \App\Models\Bidang::with('tanah.pemilik')->find($a->target_id)) {
+                            $payload = ['after' => [
+                                'nama_pemilik'     => optional(optional($b->tanah)->pemilik)->nama_lengkap,
+                                'nomor_urut'       => (string)optional($b->tanah)->nomor_urut,
+                                'jumlah_luas'      => (string)$b->luas_m2,
+                                'status_hak_tanah' => $b->status_hak,
+                                'penggunaan_tanah' => is_string($b->penggunaan)&&$b->penggunaan!=='' ? [$b->penggunaan] : (array)$b->penggunaan,
+                                'keterangan'       => $b->keterangan,
+                            ]];
+                        }
+                        break;
+                }
+            }
+        }
+        $includePayload = $r->boolean('include_payload', false);
+        $payloadOut = null;
+
+        if ($includePayload) {
+            $p = $a->payload;
+
+            // kalau payload flat untuk create WARGA → bungkus sebagai "after" + mapping ke field UI
+            if ($a->module === 'warga' && $a->action === 'create' && is_array($p)) {
+                $payloadOut = [
+                    'after' => [
+                        'nama_pemilik'     => $p['nama_lengkap'] ?? null,
+                        'nomor_urut'       => null,
+                        'jumlah_luas'      => null,
+                        'status_hak_tanah' => null,
+                        'penggunaan_tanah' => [],
+                        'keterangan'       => $p['keterangan'] ?? null, // kalau ada
+                    ],
+                ];
+            }
+
+            // kalau kamu ingin dukung semua module/action:
+            if (is_null($payloadOut)) {
+                // sudah proper before/after? → kirim seperti biasa
+                if (isset($p['before']) || isset($p['after']) || isset($p['old']) || isset($p['new'])) {
+                    $before = $p['before'] ?? $p['old'] ?? null;
+                    $after  = $p['after']  ?? $p['new'] ?? null;
+                    $payloadOut = [
+                        'before' => is_array($before) ? $before : null,
+                        'after'  => is_array($after)  ? $after  : null,
+                    ];
+                } else {
+                    // default best-effort untuk payload flat selain warga/create
+                    $payloadOut = is_array($p) ? ['after' => $p] : null;
+                }
+            }
+        }
 
         return response()->json([
             'id'               => $a->id,
@@ -183,7 +266,8 @@ class ApprovalAuditController extends Controller
             'jenis_perubahan'  => $labelMap[$a->action] ?? strtoupper($a->action),
             'status'           => $a->status,
             'target_id'        => $a->target_id,
-            'payload'          => $r->boolean('include_payload', false) ? $a->payload : null,
+            'payload' => $includePayload ? $payloadOut : null,
+ // ← sekarang bisa terisi
             'review_note'      => $a->review_note,
             'submitted_at'     => optional($a->created_at)?->toIso8601String(),
             'reviewed_at'      => optional($a->reviewed_at)?->toIso8601String(),
@@ -199,4 +283,174 @@ class ApprovalAuditController extends Controller
             ],
         ]);
     }
+
+            private function mapBidangToPayload(\App\Models\Bidang $b): array
+        {
+            $owner = optional(optional($b->tanah)->pemilik);
+            return [
+                'nama_pemilik'     => $owner->nama_lengkap ?? null,
+                'nomor_urut'       => (string) optional($b->tanah)->nomor_urut,
+                'jumlah_luas'      => (string) $b->luas_m2,
+                'status_hak_tanah' => $b->status_hak, // HM/HGB/HP/HGU/...
+                'penggunaan_tanah' => $this->penggunaanToArray($b->penggunaan),
+                'keterangan'       => $b->keterangan,
+            ];
+        }
+
+        private function mapTanahToPayload(\App\Models\Tanah $t): array
+        {
+            $owner = optional($t->pemilik);
+            return [
+                'nama_pemilik'     => $owner->nama_lengkap ?? null,
+                'nomor_urut'       => (string) $t->nomor_urut,
+                'jumlah_luas'      => (string) $t->jumlah_m2,
+                'status_hak_tanah' => null, // biasanya status per-bidang; biarkan null
+                'penggunaan_tanah' => [],   // idem
+                'keterangan'       => $t->keterangan,
+            ];
+        }
+
+        private function mapWargaToPayload(\App\Models\Warga $w): array
+        {
+            return [
+                'nama_pemilik'     => $w->nama_lengkap,
+                'nomor_urut'       => null,
+                'jumlah_luas'      => null,
+                'status_hak_tanah' => null,
+                'penggunaan_tanah' => [],
+                'keterangan'       => $w->keterangan,
+            ];
+        }
+
+        private function penggunaanToArray($penggunaan): array
+        {
+            // Jika enum string (schema baru) → bungkus jadi array
+            if (is_string($penggunaan) && $penggunaan !== '') {
+                return [$penggunaan];
+            }
+            // Jika struktur lama: mapping dari kolom boolean → array label (sesuaikan kalau masih dipakai)
+            // return array_keys(array_filter([
+            //     'SAWAH' => (bool) $penggunaan_sawah,
+            //     'TEGALAN' => (bool) $penggunaan_tegalan,
+            //     ...
+            // ]));
+            return (array) $penggunaan;
+        }
+
+    private function normalizePayloadForFE(ApprovalRequest $a): ?array
+    {
+        // 1) kalau sudah proper before/after → kirim apa adanya (ditambah mapping field)
+        $p = $a->payload;
+        if (is_array($p) && (isset($p['before']) || isset($p['after']) || isset($p['old']) || isset($p['new']))) {
+            $before = $p['before'] ?? $p['old'] ?? null;
+            $after  = $p['after']  ?? $p['new'] ?? null;
+            return [
+                'before' => is_array($before) ? $this->mapModuleFields($a->module, $before) : null,
+                'after'  => is_array($after)  ? $this->mapModuleFields($a->module, $after)  : null,
+            ];
+        }
+
+        // 2) kalau payload flat (array biasa) → bungkus sesuai action
+        if (is_array($p) && !isset($p['before']) && !isset($p['after']) && !isset($p['old']) && !isset($p['new'])) {
+            $snap = $this->mapModuleFields($a->module, $p);
+            return match ($a->action) {
+                'create' => ['after' => $snap],
+                'delete' => ['before' => $snap],
+                default  => ['after' => $snap], // update (best effort kalau tidak ada 'old')
+            };
+        }
+
+        // 3) payload null → coba snapshot current target sebagai 'after' (biar FE tidak "-")
+        if (empty($p)) {
+            switch ($a->module) {
+                case 'bidang':
+                    $b = \App\Models\Bidang::with('tanah.pemilik')->find($a->target_id);
+                    return $b ? ['after' => $this->mapBidangToFE($b)] : null;
+                case 'tanah':
+                    $t = \App\Models\Tanah::with('pemilik')->find($a->target_id);
+                    return $t ? ['after' => $this->mapTanahToFE($t)] : null;
+                case 'warga':
+                    $w = \App\Models\Warga::find($a->target_id);
+                    return $w ? ['after' => $this->mapWargaToFE($w)] : null;
+            }
+        }
+
+        return null;
+    }
+
+    // ==== Mapper: ubah struktur payload mentah jadi field yang FE pakai ====
+    // Kalau payload flat dari form, isi beberapa kemungkinan nama kolom.
+    private function mapModuleFields(string $module, array $raw): array
+    {
+        return match ($module) {
+            'bidang' => [
+                'nama_pemilik'     => $raw['nama_pemilik'] ?? $raw['pemilik'] ?? $raw['warga_nama'] ?? null,
+                'nomor_urut'       => (string)($raw['nomor_urut'] ?? $raw['tanah_nomor_urut'] ?? $raw['no_urut'] ?? ''),
+                'jumlah_luas'      => (string)($raw['jumlah_luas'] ?? $raw['luas_m2'] ?? $raw['luas'] ?? ''),
+                'status_hak_tanah' => $raw['status_hak_tanah'] ?? $raw['status_hak'] ?? null,
+                // dukung enum single / array multi
+                'penggunaan_tanah' => isset($raw['penggunaan_tanah'])
+                                        ? (array)$raw['penggunaan_tanah']
+                                        : (isset($raw['penggunaan']) ? (array)$raw['penggunaan'] : []),
+                'keterangan'       => $raw['keterangan'] ?? null,
+            ],
+            'tanah' => [
+                'nama_pemilik'     => $raw['nama_pemilik'] ?? $raw['nama_pemilik_text'] ?? $raw['warga_nama'] ?? null,
+                'nomor_urut'       => (string)($raw['nomor_urut'] ?? $raw['no_urut'] ?? ''),
+                'jumlah_luas'      => (string)($raw['jumlah_luas'] ?? $raw['jumlah_m2'] ?? $raw['luas_total'] ?? ''),
+                'status_hak_tanah' => $raw['status_hak_tanah'] ?? null, // biasanya per-bidang; boleh kosong
+                'penggunaan_tanah' => (array)($raw['penggunaan_tanah'] ?? []),
+                'keterangan'       => $raw['keterangan'] ?? null,
+            ],
+            'warga' => [
+                'nama_pemilik'     => $raw['nama_pemilik'] ?? $raw['nama_lengkap'] ?? $raw['nama'] ?? null,
+                'nomor_urut'       => null,
+                'jumlah_luas'      => null,
+                'status_hak_tanah' => null,
+                'penggunaan_tanah' => [],
+                'keterangan'       => $raw['keterangan'] ?? null,
+            ],
+            default => $raw, // fallback: kirim apa adanya
+        };
+    }
+
+    // Mapper snapshot current (kalau payload null) → FE fields
+    private function mapBidangToFE(\App\Models\Bidang $b): array
+    {
+        $owner = optional(optional($b->tanah)->pemilik);
+        return [
+            'nama_pemilik'     => $owner->nama_lengkap ?? null,
+            'nomor_urut'       => (string) optional($b->tanah)->nomor_urut,
+            'jumlah_luas'      => (string) $b->luas_m2,
+            'status_hak_tanah' => $b->status_hak,
+            'penggunaan_tanah' => is_string($b->penggunaan) && $b->penggunaan !== '' ? [$b->penggunaan] : (array)$b->penggunaan,
+            'keterangan'       => $b->keterangan,
+        ];
+    }
+
+    private function mapTanahToFE(\App\Models\Tanah $t): array
+    {
+        $owner = optional($t->pemilik);
+        return [
+            'nama_pemilik'     => $owner->nama_lengkap ?? null,
+            'nomor_urut'       => (string) $t->nomor_urut,
+            'jumlah_luas'      => (string) $t->jumlah_m2,
+            'status_hak_tanah' => null,
+            'penggunaan_tanah' => [],
+            'keterangan'       => $t->keterangan,
+        ];
+    }
+
+    private function mapWargaToFE(\App\Models\Warga $w): array
+    {
+        return [
+            'nama_pemilik'     => $w->nama_lengkap,
+            'nomor_urut'       => null,
+            'jumlah_luas'      => null,
+            'status_hak_tanah' => null,
+            'penggunaan_tanah' => [],
+            'keterangan'       => $w->keterangan,
+        ];
+    }
+
 }

@@ -10,6 +10,7 @@ use App\Http\Controllers\ApprovalController;
 use App\Http\Controllers\PublicInfografisController;
 use App\Http\Controllers\ApprovalAuditController;
 use App\Http\Controllers\MapBoundariesController;
+use App\Http\Controllers\DashboardController;
 
 Route::post('/login', [AuthController::class, 'login'])->name('login');
 
@@ -29,6 +30,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/tanah/{id}', [TanahReadController::class, 'show']);
     Route::get('/warga',      [WargaReadController::class, 'index']);
     Route::get('/warga/{id}', [WargaReadController::class, 'show']);
+
+    Route::get('/dashboard', [DashboardController::class, 'overview']);
 
     Route::middleware(['role:kepala'])->prefix('kepala')->group(function () {
         Route::get ('/approvals',               [ApprovalController::class, 'index']);      // list pending
@@ -57,6 +60,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/proposals/warga/{id}',  [StaffProposalController::class, 'proposeWargaDelete']);
 
         Route::get('/proposals/my', [StaffProposalController::class, 'myProposals']);
+        Route::get('/proposals/{id}', [StaffProposalController::class, 'myProposalsShow']);
 
     });
 

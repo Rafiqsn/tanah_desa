@@ -11,6 +11,7 @@ use App\Models\ApprovalRequest;
 use App\Models\Tanah;
 use App\Models\Bidang;
 use App\Models\Warga;
+use Illuminate\Support\Facades\DB;
 
 class StaffProposalController extends Controller
 {
@@ -607,21 +608,169 @@ class StaffProposalController extends Controller
      * GET /api/proposals/my
      * Daftar proposal milik user yang sedang login (paginate 20).
      */
-    public function myProposals(Request $r)
+    public function myProposals(Request $request)
     {
-        $p = ApprovalRequest::where('submitted_by', $r->user()->id)
-            ->latest()
-            ->paginate(20);
+        $userId  = $request->user()->id;
 
-        // tambahkan preview URL foto_ktp bila ada di payload
-        $p->getCollection()->transform(function ($item) {
-            $payload = $item->payload ?? [];
-            $item->foto_ktp_url = isset($payload['foto_ktp']) ? url($payload['foto_ktp']) : null;
-            return $item;
+        // pagination
+        $perPage = (int) $request->integer('per_page', 20);
+        $perPage = $perPage > 0 ? $perPage : 20;
+
+        // filters
+        $q       = trim((string) $request->get('q', ''));
+        $status  = trim((string) $request->get('status', '')); // approved|rejected|pending
+        $action  = trim((string) $request->get('action', '')); // create|update|delete
+        $module  = trim((string) $request->get('module', '')); // warga|tanah|bidang
+        $month   = trim((string) $request->get('month', ''));  // "01".."12"
+        $year    = trim((string) $request->get('year', ''));   // "2025"
+
+        $query = DB::table('approval_requests')
+            ->where('submitted_by', $userId);
+
+        if ($status !== '') {
+            $query->where('status', $status);
+        }
+        if ($action !== '') {
+            $query->where('action', $action);
+        }
+        if ($module !== '') {
+            $query->where('module', $module);
+        }
+        if ($year !== '') {
+            $query->whereYear('created_at', (int) $year);
+        }
+        if ($month !== '') {
+            $query->whereMonth('created_at', (int) $month);
+        }
+
+        // Pencarian sederhana di beberapa kolom + sebagian isi payload
+        if ($q !== '') {
+            $query->where(function ($w) use ($q) {
+                $like = '%' . $q . '%';
+                $w->where('module', 'like', $like)
+                  ->orWhere('action', 'like', $like)
+                  ->orWhere('status', 'like', $like)
+                  // contoh cari di payload JSON (MySQL/MariaDB)
+                  ->orWhereRaw("JSON_EXTRACT(payload, '$.preview_pemilik.nama') like ?", [$like])
+                  ->orWhereRaw("JSON_EXTRACT(payload, '$.snapshot.nama_lengkap') like ?", [$like]);
+            });
+        }
+
+        $query->orderByDesc('created_at');
+
+        $paginator = $query->paginate($perPage)->appends($request->query());
+
+        // mapping kecil agar mirip contoh kamu (tambahkan foto_ktp_url jika ada)
+        $data = collect($paginator->items())->map(function ($row) {
+            $payload = json_decode($row->payload ?: '{}', true);
+
+            // absolut-kan foto_ktp_url bila ada path relatif
+            $makeUrl = function (?string $path) {
+                if (!$path) return null;
+                if (preg_match('~^https?://~i', $path)) return $path;
+                return url($path);
+            };
+
+            if (!isset($payload['foto_ktp_url']) && isset($payload['foto_ktp'])) {
+                $payload['foto_ktp_url'] = $makeUrl($payload['foto_ktp']);
+            }
+
+            return [
+                'id'            => (int) $row->id,
+                'module'        => $row->module,
+                'action'        => $row->action,
+                'target_id'     => $row->target_id,
+                'payload'       => $payload,
+                'submitted_by'  => (int) $row->submitted_by,
+                'status'        => $row->status,
+                'reviewed_by'   => $row->reviewed_by ? (int) $row->reviewed_by : null,
+                'reviewed_at'   => $row->reviewed_at,
+                'review_note'   => $row->review_note,
+                'applied_at'    => $row->applied_at,
+                'apply_error'   => $row->apply_error,
+                'created_at'    => $row->created_at,
+                'updated_at'    => $row->updated_at,
+                // duplikasi convenience di root seperti contoh
+                'foto_ktp_url'  => $payload['foto_ktp_url'] ?? null,
+            ];
         });
 
-        return response()->json($p);
+        // Bentuk response menyerupai contoh pagination kamu
+        return response()->json([
+            'current_page'  => $paginator->currentPage(),
+            'data'          => $data,
+            'first_page_url'=> $paginator->url(1),
+            'from'          => $paginator->firstItem(),
+            'last_page'     => $paginator->lastPage(),
+            'last_page_url' => $paginator->url($paginator->lastPage()),
+            'links'         => collect($paginator->linkCollection())->map(function ($l) {
+                return [
+                    'url'   => $l['url'],
+                    'label' => $l['label'],
+                    'page'  => $l['page'] ?? null,
+                    'active'=> $l['active'],
+                ];
+            }),
+            'next_page_url' => $paginator->nextPageUrl(),
+            'path'          => $paginator->path(),
+            'per_page'      => $paginator->perPage(),
+            'prev_page_url' => $paginator->previousPageUrl(),
+            'to'            => $paginator->lastItem(),
+            'total'         => $paginator->total(),
+        ]);
     }
+
+    public function myProposalsShow(Request $request, int $id)
+    {
+        $userId = $request->user()->id;
+        $includePayload = (bool) $request->boolean('include_payload', true);
+
+        $row = DB::table('approval_requests')
+            ->where('id', $id)
+            ->where('submitted_by', $userId) // pastikan milik sendiri
+            ->first();
+
+        if (!$row) {
+            return response()->json(['message' => 'Not Found'], 404);
+        }
+
+        $payload = json_decode($row->payload ?: '{}', true);
+
+        // absolut-kan foto_ktp_url jika ada
+        $makeUrl = function (?string $path) {
+            if (!$path) return null;
+            if (preg_match('~^https?://~i', $path)) return $path;
+            return url($path);
+        };
+        if (!isset($payload['foto_ktp_url']) && isset($payload['foto_ktp'])) {
+            $payload['foto_ktp_url'] = $makeUrl($payload['foto_ktp']);
+        }
+
+        $resp = [
+            'id'            => (int) $row->id,
+            'module'        => $row->module,
+            'action'        => $row->action,
+            'target_id'     => $row->target_id,
+            'status'        => $row->status,
+            'submitted_by'  => (int) $row->submitted_by,
+            'reviewed_by'   => $row->reviewed_by ? (int) $row->reviewed_by : null,
+            'reviewed_at'   => $row->reviewed_at,
+            'review_note'   => $row->review_note,
+            'applied_at'    => $row->applied_at,
+            'apply_error'   => $row->apply_error,
+            'created_at'    => $row->created_at,
+            'updated_at'    => $row->updated_at,
+        ];
+
+        if ($includePayload) {
+            $resp['payload'] = $payload;
+            // optional: surface juga di root (biar sama contoh)
+            $resp['foto_ktp_url'] = $payload['foto_ktp_url'] ?? null;
+        }
+
+        return response()->json($resp);
+    }
+
 
     /**
      * Helper: simpan foto KTP ke public/ktp dan kembalikan PATH relatif (ktp/xxx.ext).
