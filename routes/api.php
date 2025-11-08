@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ApiTanahKas;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
@@ -12,6 +13,7 @@ use App\Http\Controllers\ApprovalAuditController;
 use App\Http\Controllers\MapBoundariesController;
 use App\Http\Controllers\DashboardController;
 
+
 Route::post('/login', [AuthController::class, 'login'])->name('login');
 
 
@@ -19,7 +21,7 @@ Route::post('/login', [AuthController::class, 'login'])->name('login');
 Route::get('/public/infografis/summary', [PublicInfografisController::class, 'summary'])
      ->middleware('throttle:30,1');
 Route::get('/public/map', [MapBoundariesController::class, 'bidang']);
-
+Route::get('/bidang-simple', [ApiTanahKas::class, 'index']);
 
 
 Route::middleware('auth:sanctum')->group(function () {
