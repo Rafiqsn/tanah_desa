@@ -14,7 +14,7 @@ class TanahReadController extends Controller
      * - Filter: status_hak/penggunaan via relasi bidang
      * - Ringkasan: bidang_count & total_luas_m2
      */
-    public function index(Request $r)
+        public function index(Request $r)
     {
         $perPage = (int) $r->input('per_page', 20);
 
@@ -22,23 +22,35 @@ class TanahReadController extends Controller
             ->with(['pemilik:id,nama_lengkap,nik'])                  // ambil nama pemilik dari tabel warga
             ->withCount('bidang')                                    // jumlah bidang per tanah
             ->withSum('bidang as total_luas_m2', 'luas_m2')          // total luas semua bidang
-            ->orderByDesc('id');
+            ->orderByDesc('updated_at');                             // data terbaru di atas
 
-        if ($s = $r->input('search')) {
+        // 🔍 Search: terima 'search' atau 'q' (FE pakai 'q')
+        $search = $r->input('search', $r->input('q'));
+        if ($search) {
+            $s = $search;
             $q->where(function ($w) use ($s) {
                 $w->where('nomor_urut', 'like', "%{$s}%")
-                  ->orWhereHas('pemilik', function ($p) use ($s) {
-                      $p->where('nama_lengkap', 'like', "%{$s}%")
+                ->orWhereHas('pemilik', function ($p) use ($s) {
+                    $p->where('nama_lengkap', 'like', "%{$s}%")
                         ->orWhere('nik', 'like', "%{$s}%");
-                  });
+                });
             });
         }
 
+        // ⚖️ Filter status hak
         if ($status = $r->input('status_hak')) {
-            $q->whereHas('bidang', fn($b) => $b->where('status_hak', strtoupper($status)));
+            $q->whereHas('bidang', fn ($b) => $b->where('status_hak', strtoupper($status)));
         }
+
+        // 🏷️ Filter penggunaan
         if ($guna = $r->input('penggunaan')) {
-            $q->whereHas('bidang', fn($b) => $b->where('penggunaan', strtoupper($guna)));
+            $q->whereHas('bidang', fn ($b) => $b->where('penggunaan', strtoupper($guna)));
+        }
+
+        // 📅 Filter bulan & tahun berdasarkan UPDATED_AT TANAH
+        if ($r->filled('month') && $r->filled('year')) {
+            $q->whereYear('updated_at', (int) $r->year)
+            ->whereMonth('updated_at', (int) $r->month);
         }
 
         $page = $q->paginate($perPage);
@@ -51,6 +63,7 @@ class TanahReadController extends Controller
 
         return response()->json($page);
     }
+
 
     /**
      * GET /api/tanah/{id}
