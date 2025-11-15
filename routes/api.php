@@ -12,7 +12,7 @@ use App\Http\Controllers\PublicInfografisController;
 use App\Http\Controllers\ApprovalAuditController;
 use App\Http\Controllers\MapBoundariesController;
 use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\ExportTanahPdfController;
+use App\Http\Controllers\ExportTanahController;
 
 
 Route::post('/login', [AuthController::class, 'login'])->name('login');
@@ -65,7 +65,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/proposals/my', [StaffProposalController::class, 'myProposals']);
         Route::get('/proposals/{id}', [StaffProposalController::class, 'myProposalsShow']);
 
-        Route::get('/management-tanah/export/pdf', [ExportTanahPdfController::class, 'bukuTanahPdf']);
+        Route::get('/management-tanah/export/pdf', [ExportTanahController::class, 'bukuTanahPdf']);
+        Route::get('/management-tanah/export/csv', [ExportTanahController::class, 'bukuTanahCsv']);
 
     });
 
