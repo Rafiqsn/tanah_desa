@@ -13,6 +13,7 @@ use App\Http\Controllers\ApprovalAuditController;
 use App\Http\Controllers\MapBoundariesController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ExportTanahController;
+use App\Http\Controllers\ImportTanahController;
 
 
 Route::post('/login', [AuthController::class, 'login'])->name('login');
@@ -67,6 +68,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/management-tanah/export/pdf', [ExportTanahController::class, 'bukuTanahPdf']);
         Route::get('/management-tanah/export/csv', [ExportTanahController::class, 'bukuTanahCsv']);
+
+        Route::post('/management-tanah/import/csv',[ImportTanahController::class, 'importTanahCsv']);
+        Route::post('/management-warga/import/csv',[ImportTanahController::class, 'importWargaCsv']
+    );
 
     });
 
